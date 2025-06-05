@@ -15,19 +15,29 @@
         #map {
             height: 70vh; /* 화면 높이의 70% */
             width: 100%;
+            position: relative; /* 정보 패널이 지도 위에 올 수 있도록 */
         }
         .controls {
             padding: 10px;
             background-color: #f0f0f0;
             border-bottom: 1px solid #ccc;
-            display: flex; /* 버튼들을 가로로 정렬 */
-            flex-wrap: wrap; /* 화면이 작을 때 버튼들이 다음 줄로 넘어가도록 */
-            gap: 5px; /* 버튼 사이 간격 */
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px; /* 컨트롤 간 간격 */
+            align-items: center; /* 세로 정렬 */
         }
-        .controls input[type="text"], .controls button {
+        .controls input[type="text"], .controls button, .controls label {
             padding: 8px;
             border-radius: 4px;
             border: 1px solid #ccc;
+            margin-right: 5px; /* 오른쪽 마진 추가 */
+        }
+        .controls label { /* 라디오 버튼 레이블 스타일 */
+            border: none;
+            padding-left: 0;
+        }
+        .controls input[type="radio"] {
+            margin-right: 3px;
         }
         #zoom-message {
             padding: 10px;
@@ -46,7 +56,44 @@
             border-radius: 4px;
             font-size: 0.8em;
             color: #555;
-            z-index: 1000;
+            z-index: 1000; /* 다른 요소들보다 위에 표시 */
+        }
+        #info-panel {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            max-height: 28vh;
+            background-color: #ffffff;
+            border-top: 2px solid #ccc;
+            box-shadow: 0 -2px 5px rgba(0,0,0,0.1);
+            z-index: 1001;
+            transform: translateY(100%);
+            transition: transform 0.3s ease-in-out;
+            overflow-y: auto;
+            padding: 15px;
+            padding-top: 35px; /* 닫기 버튼 공간 확보 */
+            box-sizing: border-box;
+        }
+        #info-panel.visible {
+            transform: translateY(0);
+        }
+        #info-panel-content {
+            margin-top: 5px;
+        }
+        #close-info-panel {
+            position: absolute;
+            top: 8px;
+            right: 10px;
+            padding: 5px 10px;
+            cursor: pointer;
+            border: 1px solid #aaa;
+            background-color: #eee;
+            border-radius: 3px;
+            font-size: 0.9em;
+        }
+        #tile-layer-controls label { /* 타일 레이어 컨트롤 레이블에 약간의 오른쪽 마진 */
+            margin-right: 10px;
         }
     </style>
 </head>
@@ -57,27 +104,77 @@
         <input type="text" id="searchPointInput" placeholder="조사지점명 검색">
         <button onclick="searchAndZoomToPoint()">검색</button>
         <button onclick="findMyLocation()">내 위치 표시</button>
+        <div id="tile-layer-controls" style="margin-left: auto;"> <label><input type="radio" name="tileLayer" value="osmDefault" checked onchange="changeTileLayer(this.value)"> 기본</label>
+            <label><input type="radio" name="tileLayer" value="osmHOT" onchange="changeTileLayer(this.value)"> OSM HOT</label>
+            <label><input type="radio" name="tileLayer" value="stamenTerrain" onchange="changeTileLayer(this.value)"> 지형도</label>
+            <label><input type="radio" name="tileLayer" value="cartoDBDark" onchange="changeTileLayer(this.value)"> 어두운</label>
+        </div>
     </div>
 
     <div id="zoom-message">지도를 더 확대하면 조사지점이 표시됩니다.</div>
     <div id="map"></div>
+    <div id="info-panel">
+        <button id="close-info-panel" onclick="closeInfoPanel()">닫기</button>
+        <div id="info-panel-content">마커를 클릭하면 여기에 상세 정보가 표시됩니다.</div>
+    </div>
     <div id="data-warning">데이터 유출 금지. 단순 조사 참고용으로만 사용 가능.</div>
 
     <script>
         var map = L.map('map').setView([36.5, 127.5], 7);
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-        }).addTo(map);
+        // 초기 타일 레이어는 changeTileLayer 함수를 통해 설정되므로 여기서는 바로 추가하지 않음
 
         var markersLayer = new L.LayerGroup().addTo(map);
         var globalGroupedData = {};
-        const CSV_FILE_PATH = 'point1.csv'; // CSV 파일 경로 (HTML과 같은 위치 가정)
+        const CSV_FILE_PATH = 'bmn11-24_fish_point1.csv';
         const MIN_ZOOM_LEVEL_TO_SHOW_MARKERS = 10;
 
         var zoomMessageDiv = document.getElementById('zoom-message');
         var userLocationMarker = null;
         var userLocationAccuracyCircle = null;
         var csvTextInitiallyLoaded = false;
+        var currentTileLayer = null;
+
+        const tileLayers = {
+            osmDefault: {
+                url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+                options: { attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' }
+            },
+            osmHOT: {
+                url: 'https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',
+                options: { attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, Tiles style by <a href="https://www.hotosm.org/" target="_blank">HOT</a>' }
+            },
+            stamenTerrain: {
+                url: 'https://stamen-tiles-{s}.a.ssl.fastly.net/terrain/{z}/{x}/{y}{r}.png',
+                options: { attribution: 'Map tiles by <a href="http://stamen.com">Stamen Design</a>, <a href="http://creativecommons.org/licenses/by/3.0">CC BY 3.0</a> &mdash; OSM data &copy; OSM contributors', subdomains: 'abcd', minZoom: 0, maxZoom: 18 }
+            },
+            cartoDBDark: {
+                url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+                options: { attribution: '&copy; OSM contributors &copy; <a href="https://carto.com/attributions">CARTO</a>', subdomains: 'abcd', maxZoom: 20 }
+            }
+        };
+
+        function changeTileLayer(layerKey) {
+            if (currentTileLayer) {
+                map.removeLayer(currentTileLayer);
+            }
+            if (tileLayers[layerKey]) {
+                currentTileLayer = L.tileLayer(tileLayers[layerKey].url, tileLayers[layerKey].options).addTo(map);
+            } else {
+                currentTileLayer = L.tileLayer(tileLayers.osmDefault.url, tileLayers.osmDefault.options).addTo(map);
+            }
+        }
+        
+        var infoPanel = document.getElementById('info-panel');
+        var infoPanelContent = document.getElementById('info-panel-content');
+
+        function openInfoPanel(content) {
+            infoPanelContent.innerHTML = content;
+            infoPanel.classList.add('visible');
+        }
+
+        function closeInfoPanel() {
+            infoPanel.classList.remove('visible');
+        }
 
         function loadCSVFromServer() {
             alert("서버에서 CSV 파일을 불러옵니다. 파일 크기에 따라 시간이 걸릴 수 있습니다.");
@@ -112,14 +209,12 @@
         function parseCSV(csvText) {
             console.log("Raw CSV Text (first 500 chars):", csvText ? csvText.substring(0, 500) : "CSV Text is null or undefined");
             if (!csvText || csvText.trim() === "") {
-                alert('CSV 파일 내용이 비어있습니다.');
-                return [];
+                alert('CSV 파일 내용이 비어있습니다.'); return [];
             }
             var lines = csvText.trim().split(/\r\n|\r|\n/);
             var result = [];
             if (lines.length === 0 || !lines[0] || lines[0].trim() === '') {
-                alert('CSV 파일이 비어 있거나 헤더 정보를 읽을 수 없습니다.');
-                return [];
+                alert('CSV 파일이 비어 있거나 헤더 정보를 읽을 수 없습니다.'); return [];
             }
 
             var headers = lines[0].split(',').map(header => header.trim().replace(/^"|"$/g, ''));
@@ -128,42 +223,24 @@
             }
             console.log("Parsed Headers:", headers);
 
-            var latColName = 'bmn_point_y';
-            var lonColName = 'bmn_point_x';
-            var surveyYearColName = '조사년도';
-            var speciesNameColName = '국명';
-            var countColName = '개체수';
-            var pointNameColName = '조사지점';
+            var latColName = 'bmn_point_y'; var lonColName = 'bmn_point_x';
+            var surveyYearColName = '조사년도'; var speciesNameColName = '국명';
+            var countColName = '개체수'; var pointNameColName = '조사지점';
 
-            var latIndex = headers.indexOf(latColName);
-            var lonIndex = headers.indexOf(lonColName);
-            var yearIndex = headers.indexOf(surveyYearColName);
-            var speciesIndex = headers.indexOf(speciesNameColName);
-            var countIndex = headers.indexOf(countColName);
-            var pointIndex = headers.indexOf(pointNameColName);
+            var latIndex = headers.indexOf(latColName); var lonIndex = headers.indexOf(lonColName);
+            var yearIndex = headers.indexOf(surveyYearColName); var speciesIndex = headers.indexOf(speciesNameColName);
+            var countIndex = headers.indexOf(countColName); var pointIndex = headers.indexOf(pointNameColName);
 
-            if (pointIndex === -1) {
-                 alert('CSV 파일에서 \'조사지점\' 컬럼(\''+ pointNameColName + '\')을 찾을 수 없습니다. 이 컬럼은 필수입니다. 실제 인식된 헤더: ' + headers.join(', '));
-                 return [];
-            }
-            if (latIndex === -1) {
-                alert('CSV 파일에서 위도(\'' + latColName + '\') 컬럼을 찾을 수 없습니다. 실제 인식된 헤더: ' + headers.join(', '));
-                return [];
-            }
-            if (lonIndex === -1) {
-                alert('CSV 파일에서 경도(\'' + lonColName + '\') 컬럼을 찾을 수 없습니다. 실제 인식된 헤더: ' + headers.join(', '));
-                return [];
-            }
+            if (pointIndex === -1) { alert('CSV 파일에서 \'조사지점\' 컬럼(\''+ pointNameColName + '\')을 찾을 수 없습니다. 실제 헤더: ' + headers.join(', ')); return []; }
+            if (latIndex === -1) { alert('CSV 파일에서 위도(\'' + latColName + '\') 컬럼을 찾을 수 없습니다. 실제 헤더: ' + headers.join(', ')); return []; }
+            if (lonIndex === -1) { alert('CSV 파일에서 경도(\'' + lonColName + '\') 컬럼을 찾을 수 없습니다. 실제 헤더: ' + headers.join(', ')); return []; }
 
             for (var i = 1; i < lines.length; i++) {
                 if (lines[i].trim() === "") continue;
                 var currentline = lines[i].split(',');
-
                 if (currentline.length === headers.length) {
-                    var lat = parseFloat(currentline[latIndex]);
-                    var lon = parseFloat(currentline[lonIndex]);
+                    var lat = parseFloat(currentline[latIndex]); var lon = parseFloat(currentline[lonIndex]);
                     var pointNameValue = currentline[pointIndex] ? currentline[pointIndex].trim().replace(/^"|"$/g, '') : '알 수 없는 지점';
-
                     if (!isNaN(lat) && !isNaN(lon)) {
                         result.push({
                             "위도": lat, "경도": lon, "조사지점": pointNameValue,
@@ -171,15 +248,10 @@
                             "국명": speciesIndex > -1 && currentline[speciesIndex] ? currentline[speciesIndex].trim().replace(/^"|"$/g, '') : '정보 없음',
                             "개체수": countIndex > -1 && currentline[countIndex] ? parseInt(currentline[countIndex].trim().replace(/^"|"$/g, '')) : 0
                         });
-                    } else {
-                        console.warn("경고: 유효하지 않은 위도/경도 값 - 지점: " + pointNameValue + ", 위도: " + currentline[latIndex] + ", 경도: " + currentline[lonIndex]);
-                    }
-                } else {
-                     console.warn("경고: 컬럼 수 불일치 - Line " + (i+1) + ": " + lines[i]);
-                }
+                    } else { console.warn("경고: 유효하지 않은 위도/경도 값 - 지점: " + pointNameValue + ", 위도: " + currentline[latIndex] + ", 경도: " + currentline[lonIndex]); }
+                } else { console.warn("경고: 컬럼 수 불일치 - Line " + (i+1) + ": " + lines[i]); }
             }
-            console.log("Parsed Data Count:", result.length);
-            return result;
+            console.log("Parsed Data Count:", result.length); return result;
         }
 
         function groupDataByPointName(parsedData) {
@@ -187,13 +259,9 @@
             parsedData.forEach(function(item) {
                 var pointName = item.조사지점;
                 if (!grouped[pointName]) {
-                    grouped[pointName] = {
-                        "위도": item.위도, "경도": item.경도, "조사데이터": []
-                    };
+                    grouped[pointName] = { "위도": item.위도, "경도": item.경도, "조사데이터": [] };
                 }
-                grouped[pointName].조사데이터.push({
-                    "조사년도": item.조사년도, "국명": item.국명, "개체수": item.개체수
-                });
+                grouped[pointName].조사데이터.push({ "조사년도": item.조사년도, "국명": item.국명, "개체수": item.개체수 });
             });
             return grouped;
         }
@@ -201,112 +269,87 @@
         function displayGroupedDataOnMap(groupedData) {
             markersLayer.clearLayers();
             var currentZoom = map.getZoom();
-
             if (currentZoom < MIN_ZOOM_LEVEL_TO_SHOW_MARKERS) {
-                if (Object.keys(globalGroupedData).length > 0 || !csvTextInitiallyLoaded) {
-                     zoomMessageDiv.style.display = 'block';
-                } else {
-                     zoomMessageDiv.style.display = 'none';
-                }
+                if (Object.keys(globalGroupedData).length > 0 || !csvTextInitiallyLoaded) { zoomMessageDiv.style.display = 'block'; }
+                else { zoomMessageDiv.style.display = 'none'; }
                 return;
             }
             zoomMessageDiv.style.display = 'none';
-
             var pointCount = Object.keys(groupedData).length;
-            if (pointCount > 0) {
-                console.log(pointCount + "개의 고유한 조사지점 데이터를 기반으로 마커를 표시합니다. 현재 줌 레벨:", currentZoom);
-            } else {
-                console.log("표시할 조사지점 데이터가 없습니다.");
-                return;
-            }
-            
-            if (pointCount > 2000) { 
-                if (!confirm(pointCount + "개의 마커를 표시합니다. 브라우저가 느려질 수 있습니다. 계속하시겠습니까?")) {
-                    return;
-                }
-            }
+            if (pointCount > 0) { console.log(pointCount + "개의 고유한 조사지점 데이터를 기반으로 마커를 표시합니다. 현재 줌 레벨:", currentZoom); }
+            else { console.log("표시할 조사지점 데이터가 없습니다."); return; }
+            if (pointCount > 2000 && !confirm(pointCount + "개의 마커를 표시합니다. 브라우저가 느려질 수 있습니다. 계속하시겠습니까?")) { return; }
 
             for (var pointName in groupedData) {
                 if (groupedData.hasOwnProperty(pointName)) {
                     var pointInfo = groupedData[pointName];
                     var marker = L.circleMarker([pointInfo.위도, pointInfo.경도], {
-                        radius: 5, fillColor: "green", color: "darkgreen",
-                        weight: 1, opacity: 1, fillOpacity: 0.8
+                        radius: 5, fillColor: "green", color: "darkgreen", weight: 1, opacity: 1, fillOpacity: 0.8
                     });
-
-                    var popupContent = "<h4>" + pointName + "</h4>";
-                    popupContent += "<div style='max-height: 200px; overflow-y: auto;'>";
-                    popupContent += "<table><thead><tr><th>조사년도</th><th>국명</th><th>개체수</th></tr></thead><tbody>";
+                    var popupDetailContent = "<h4>" + pointName + "</h4><div style='max-height: 150px; overflow-y: auto;'><table><thead><tr><th>조사년도</th><th>국명</th><th>개체수</th></tr></thead><tbody>";
                     pointInfo.조사데이터.sort((a, b) => {
                         if (a.조사년도 !== b.조사년도) return String(a.조사년도).localeCompare(String(b.조사년도));
                         return String(a.국명).localeCompare(String(b.국명));
                     });
-                    pointInfo.조사데이터.forEach(function(record) {
-                        popupContent += "<tr><td>" + record.조사년도 + "</td><td>" + record.국명 + "</td><td>" + record.개체수 + "</td></tr>";
-                    });
-                    popupContent += "</tbody></table></div>";
-                    marker.bindPopup(popupContent);
+                    pointInfo.조사데이터.forEach(function(record) { popupDetailContent += "<tr><td>" + record.조사년도 + "</td><td>" + record.국명 + "</td><td>" + record.개체수 + "</td></tr>"; });
+                    popupDetailContent += "</tbody></table></div>";
+                    
+                    // 팝업과 정보 패널 동시 사용 또는 선택적 사용
+                    marker.bindPopup("<b>" + pointName + "</b><br>상세 정보는 하단 패널 또는 클릭"); 
+                    marker.on('click', function(e) { // e 변수를 사용하려면 함수 인자로 받아야 함
+                        openInfoPanel(this.options.customData.content); // 사용자 정의 데이터에서 내용을 가져옴
+                    }, { customData: { content: popupDetailContent } }); // 마커에 내용을 전달하기 위한 방법
+
+                    // 위 marker.on('click',...) 부분을 다음과 같이 수정하는 것이 더 명확할 수 있습니다.
+                    // 각 마커에 고유한 컨텐츠를 전달하기 위해, 클로저를 활용하거나 마커 객체에 직접 데이터를 저장합니다.
+                    // 여기서는 간단하게 각 마커가 자신의 popupDetailContent를 참조하도록 수정합니다.
+                    (function(pName, pDetailContent) {
+                        marker.on('click', function() {
+                            openInfoPanel(pDetailContent);
+                        });
+                    })(pointName, popupDetailContent);
+
+
                     markersLayer.addLayer(marker);
                 }
             }
         }
         
-        map.on('zoomend', function() {
-            displayGroupedDataOnMap(globalGroupedData);
-        });
+        map.on('zoomend', function() { displayGroupedDataOnMap(globalGroupedData); });
+        map.on('click', function() { closeInfoPanel(); }); // 지도 클릭 시 정보 패널 닫기
 
         function searchAndZoomToPoint() {
             var searchInput = document.getElementById('searchPointInput').value.trim();
-            if (!searchInput) {
-                alert("검색할 조사지점명을 입력해주세요."); return;
-            }
-            if (Object.keys(globalGroupedData).length === 0) {
-                alert("먼저 서버에서 CSV 데이터를 불러오고 데이터가 정상적으로 로드되었는지 확인해주세요."); return;
-            }
+            if (!searchInput) { alert("검색할 조사지점명을 입력해주세요."); return; }
+            if (Object.keys(globalGroupedData).length === 0) { alert("먼저 서버에서 CSV 데이터를 불러오고 데이터가 정상적으로 로드되었는지 확인해주세요."); return; }
             if (globalGroupedData.hasOwnProperty(searchInput)) {
                 var pointInfo = globalGroupedData[searchInput];
                 map.flyTo([pointInfo.위도, pointInfo.경도], Math.max(MIN_ZOOM_LEVEL_TO_SHOW_MARKERS, 15));
-                markersLayer.eachLayer(function(layer) {
-                    var layerLatLng = layer.getLatLng();
-                    if (layerLatLng.lat === pointInfo.위도 && layerLatLng.lng === pointInfo.경도) {
-                         setTimeout(function() { layer.openPopup(); }, 500);
-                    }
-                });
-            } else {
-                alert("'" + searchInput + "' 조사지점을 찾을 수 없습니다. 정확한 이름을 입력했는지 확인해주세요.");
-            }
+                // 정보 패널에도 해당 지점 정보 표시
+                var popupDetailContentForSearch = "<h4>" + searchInput + "</h4><div style='max-height: 150px; overflow-y: auto;'><table><thead><tr><th>조사년도</th><th>국명</th><th>개체수</th></tr></thead><tbody>";
+                pointInfo.조사데이터.sort((a,b) => { /* 정렬 로직 */ if(a.조사년도 !== b.조사년도) return String(a.조사년도).localeCompare(String(b.조사년도)); return String(a.국명).localeCompare(String(b.국명));});
+                pointInfo.조사데이터.forEach(function(record){ popupDetailContentForSearch += "<tr><td>" + record.조사년도 + "</td><td>" + record.국명 + "</td><td>" + record.개체수 + "</td></tr>"; });
+                popupDetailContentForSearch += "</tbody></table></div>";
+                openInfoPanel(popupDetailContentForSearch);
+
+            } else { alert("'" + searchInput + "' 조사지점을 찾을 수 없습니다. 정확한 이름을 입력했는지 확인해주세요."); }
         }
 
         function findMyLocation() {
-            if (!navigator.geolocation) {
-                alert("죄송합니다, 사용자의 브라우저에서는 위치 정보 기능을 지원하지 않습니다.");
-                return;
-            }
-            if (userLocationMarker) {
-                map.removeLayer(userLocationMarker); userLocationMarker = null;
-            }
-            if (userLocationAccuracyCircle) {
-                map.removeLayer(userLocationAccuracyCircle); userLocationAccuracyCircle = null;
-            }
-            navigator.geolocation.getCurrentPosition(showPosition, showError, {
-                enableHighAccuracy: true, timeout: 10000, maximumAge: 0
-            });
+            if (!navigator.geolocation) { alert("죄송합니다, 사용자의 브라우저에서는 위치 정보 기능을 지원하지 않습니다."); return; }
+            if (userLocationMarker) { map.removeLayer(userLocationMarker); userLocationMarker = null; }
+            if (userLocationAccuracyCircle) { map.removeLayer(userLocationAccuracyCircle); userLocationAccuracyCircle = null; }
+            navigator.geolocation.getCurrentPosition(showPosition, showError, { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 });
         }
 
         function showPosition(position) {
-            var lat = position.coords.latitude;
-            var lon = position.coords.longitude;
-            var accuracy = position.coords.accuracy;
+            var lat = position.coords.latitude; var lon = position.coords.longitude; var accuracy = position.coords.accuracy;
             console.log("현재 위치: 위도 " + lat + ", 경도 " + lon + ", 정확도 " + accuracy + "m");
-
             userLocationMarker = L.circleMarker([lat, lon], {
-                radius: 7, fillColor: "blue", color: "#0000FF",
-                weight: 1, opacity: 1, fillOpacity: 0.8
+                radius: 7, fillColor: "blue", color: "#0000FF", weight: 1, opacity: 1, fillOpacity: 0.8
             }).addTo(map).bindPopup("현재 내 위치 (정확도: " + accuracy.toFixed(0) + "m)").openPopup();
-
             userLocationAccuracyCircle = L.circle([lat, lon], {
-                radius: accuracy, color: 'blue', fillColor: 'blue',
-                fillOpacity: 0.15, weight: 0
+                radius: accuracy, color: 'blue', fillColor: 'blue', fillOpacity: 0.15, weight: 0
             }).addTo(map);
             map.flyTo([lat, lon], 14);
         }
@@ -320,11 +363,11 @@
                 case error.UNKNOWN_ERROR: message += "알 수 없는 오류가 발생했습니다."; break;
                 default: message += error.message; break;
             }
-            alert(message);
-            console.error("Geolocation 오류:", error);
+            alert(message); console.error("Geolocation 오류:", error);
         }
 
         document.addEventListener('DOMContentLoaded', function() {
+             changeTileLayer('osmDefault'); // 기본 타일 레이어 설정
              if (map.getZoom() < MIN_ZOOM_LEVEL_TO_SHOW_MARKERS && !csvTextInitiallyLoaded) {
                  zoomMessageDiv.style.display = 'block';
              }
