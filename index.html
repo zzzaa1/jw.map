@@ -71,12 +71,13 @@
 
         var markersLayer = new L.LayerGroup().addTo(map);
         var globalGroupedData = {};
-        const CSV_FILE_PATH = 'point1.csv'; // CSV 파일 경로
+        const CSV_FILE_PATH = 'point1.csv'; // CSV 파일 경로 (HTML과 같은 위치 가정)
         const MIN_ZOOM_LEVEL_TO_SHOW_MARKERS = 10;
 
         var zoomMessageDiv = document.getElementById('zoom-message');
         var userLocationMarker = null;
         var userLocationAccuracyCircle = null;
+        var csvTextInitiallyLoaded = false;
 
         function loadCSVFromServer() {
             alert("서버에서 CSV 파일을 불러옵니다. 파일 크기에 따라 시간이 걸릴 수 있습니다.");
@@ -88,6 +89,7 @@
                     return response.text();
                 })
                 .then(csvText => {
+                    csvTextInitiallyLoaded = true; 
                     var parsedData = parseCSV(csvText);
                     if (parsedData && parsedData.length > 0) {
                         globalGroupedData = groupDataByPointName(parsedData);
@@ -99,6 +101,7 @@
                     }
                 })
                 .catch(error => {
+                    csvTextInitiallyLoaded = true;
                     console.error('CSV 파일을 불러오는 중 오류 발생:', error);
                     alert('CSV 파일을 불러오는 중 오류가 발생했습니다: ' + error.message);
                     globalGroupedData = {};
@@ -200,8 +203,7 @@
             var currentZoom = map.getZoom();
 
             if (currentZoom < MIN_ZOOM_LEVEL_TO_SHOW_MARKERS) {
-                console.log("줌 레벨이 낮아 마커를 표시하지 않습니다. 현재 줌 레벨:", currentZoom, "최소 필요 줌 레벨:", MIN_ZOOM_LEVEL_TO_SHOW_MARKERS);
-                if (Object.keys(globalGroupedData).length > 0 || !Object.keys(globalGroupedData).length && !csvTextInitiallyLoaded) { // 데이터가 로드되었거나, 아직 로드 시도 전일 때만 메시지 표시
+                if (Object.keys(globalGroupedData).length > 0 || !csvTextInitiallyLoaded) {
                      zoomMessageDiv.style.display = 'block';
                 } else {
                      zoomMessageDiv.style.display = 'none';
@@ -249,8 +251,6 @@
             }
         }
         
-        var csvTextInitiallyLoaded = false; // CSV 로드 시도 여부 플래그
-
         map.on('zoomend', function() {
             displayGroupedDataOnMap(globalGroupedData);
         });
@@ -267,7 +267,8 @@
                 var pointInfo = globalGroupedData[searchInput];
                 map.flyTo([pointInfo.위도, pointInfo.경도], Math.max(MIN_ZOOM_LEVEL_TO_SHOW_MARKERS, 15));
                 markersLayer.eachLayer(function(layer) {
-                    if (layer.getLatLng().lat === pointInfo.위도 && layer.getLatLng().lng === pointInfo.경도) {
+                    var layerLatLng = layer.getLatLng();
+                    if (layerLatLng.lat === pointInfo.위도 && layerLatLng.lng === pointInfo.경도) {
                          setTimeout(function() { layer.openPopup(); }, 500);
                     }
                 });
@@ -324,93 +325,10 @@
         }
 
         document.addEventListener('DOMContentLoaded', function() {
-            // 페이지 로드 시 초기 줌 레벨에 따라 메시지를 한번 업데이트
-            // loadCSVFromServer 함수가 호출되기 전이므로, globalGroupedData는 비어있음
-            // 따라서, csvTextInitiallyLoaded 플래그를 사용하여 초기 로드 시도 전임을 구분
              if (map.getZoom() < MIN_ZOOM_LEVEL_TO_SHOW_MARKERS && !csvTextInitiallyLoaded) {
                  zoomMessageDiv.style.display = 'block';
              }
         });
-        
-        // loadCSVFromServer 함수 수정 시 csvTextInitiallyLoaded = true; 추가
-        // (기존 함수 내 .then() 또는 .catch() 블록에 추가)
-        // 예시:
-        // .then(csvText => {
-        //     csvTextInitiallyLoaded = true;
-        //     // ... 기존 로직 ...
-        // })
-        // .catch(error => {
-        //     csvTextInitiallyLoaded = true;
-        //     // ... 기존 로직 ...
-        // });
-        // --> loadCSVFromServer 함수 자체를 수정하여 플래그를 설정하는 것이 더 명확합니다.
-        // 아래와 같이 수정합니다.
-
-        function loadCSVFromServer_modified() { // 이름 변경하여 기존 함수와 구분
-            alert("서버에서 CSV 파일을 불러옵니다. 파일 크기에 따라 시간이 걸릴 수 있습니다.");
-            csvTextInitiallyLoaded = false; // 로드 시도 시작
-            fetch(CSV_FILE_PATH)
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error('네트워크 응답이 올바르지 않습니다. 파일 경로(' + CSV_FILE_PATH + ')를 확인하세요: ' + response.statusText);
-                    }
-                    return response.text();
-                })
-                .then(csvText => {
-                    csvTextInitiallyLoaded = true; // 로드 성공/실패 여부와 관계없이 로드 시도 완료
-                    var parsedData = parseCSV(csvText);
-                    if (parsedData && parsedData.length > 0) {
-                        globalGroupedData = groupDataByPointName(parsedData);
-                        displayGroupedDataOnMap(globalGroupedData);
-                    } else if (parsedData) {
-                        alert("CSV 파일에서 유효한 데이터를 찾지 못했거나, 데이터가 없습니다. 파일 내용을 확인해주세요.");
-                        globalGroupedData = {};
-                        displayGroupedDataOnMap(globalGroupedData); // 빈 데이터로 지도 업데이트
-                    }
-                })
-                .catch(error => {
-                    csvTextInitiallyLoaded = true; // 로드 시도 완료
-                    console.error('CSV 파일을 불러오는 중 오류 발생:', error);
-                    alert('CSV 파일을 불러오는 중 오류가 발생했습니다: ' + error.message);
-                    globalGroupedData = {};
-                    displayGroupedDataOnMap(globalGroupedData); // 빈 데이터로 지도 업데이트
-                });
-        }
-        // HTML의 onclick에서 loadCSVFromServer_modified()를 호출하도록 변경해야 합니다.
-        // 또는 원래 loadCSVFromServer 함수를 아래 내용으로 덮어씁니다.
-
-        // 원래 loadCSVFromServer 함수를 아래 내용으로 수정합니다.
-        function loadCSVFromServer() { // 기존 함수명 유지
-            alert("서버에서 CSV 파일을 불러옵니다. 파일 크기에 따라 시간이 걸릴 수 있습니다.");
-            // csvTextInitiallyLoaded = false; // 로드 시도 전에는 false 상태 유지, 혹은 로드 시작 시점에 true로 변경
-            // 아래 fetch 로직에서 완료 후 true로 설정
-            fetch(CSV_FILE_PATH)
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error('네트워크 응답이 올바르지 않습니다. 파일 경로(' + CSV_FILE_PATH + ')를 확인하세요: ' + response.statusText);
-                    }
-                    return response.text();
-                })
-                .then(csvText => {
-                    csvTextInitiallyLoaded = true; 
-                    var parsedData = parseCSV(csvText);
-                    if (parsedData && parsedData.length > 0) {
-                        globalGroupedData = groupDataByPointName(parsedData);
-                        displayGroupedDataOnMap(globalGroupedData);
-                    } else if (parsedData) {
-                        alert("CSV 파일에서 유효한 데이터를 찾지 못했거나, 데이터가 없습니다. 파일 내용을 확인해주세요.");
-                        globalGroupedData = {};
-                        displayGroupedDataOnMap(globalGroupedData);
-                    }
-                })
-                .catch(error => {
-                    csvTextInitiallyLoaded = true;
-                    console.error('CSV 파일을 불러오는 중 오류 발생:', error);
-                    alert('CSV 파일을 불러오는 중 오류가 발생했습니다: ' + error.message);
-                    globalGroupedData = {};
-                    displayGroupedDataOnMap(globalGroupedData);
-                });
-        }
 
     </script>
 </body>
