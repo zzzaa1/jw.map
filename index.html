@@ -11,60 +11,85 @@
      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
      crossorigin=""></script>
     <style>
+        body { font-family: sans-serif; margin: 0; }
         #map {
-            height: 600px;
+            height: 70vh; /* 화면 높이의 70% */
             width: 100%;
+        }
+        .controls {
+            padding: 10px;
+            background-color: #f0f0f0;
+            border-bottom: 1px solid #ccc;
+        }
+        .controls input[type="text"], .controls button {
+            padding: 8px;
+            margin-right: 5px;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+        }
+        #zoom-message {
+            padding: 10px;
+            text-align: center;
+            background-color: #fffbcc;
+            border-bottom: 1px solid #ccc;
+            display: none; /* 초기에는 숨김 */
         }
     </style>
 </head>
 <body>
-    <button onclick="loadCSVFromServer()">서버에서 CSV 데이터 불러오기</button>
 
-    <div style="margin-top: 10px; margin-bottom: 10px;">
+    <div class="controls">
+        <button onclick="loadCSVFromServer()">서버에서 CSV 데이터 불러오기</button>
         <input type="text" id="searchPointInput" placeholder="조사지점명 검색">
         <button onclick="searchAndZoomToPoint()">검색 및 이동</button>
     </div>
 
+    <div id="zoom-message">지도를 더 확대하면 조사지점이 표시됩니다.</div>
     <div id="map"></div>
 
     <script>
-        var map = L.map('map').setView([36.5, 127.5], 7);
+        var map = L.map('map').setView([36.5, 127.5], 7); // 초기 줌 레벨
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         }).addTo(map);
 
         var markersLayer = new L.LayerGroup().addTo(map);
-        var globalGroupedData = {};
-        const CSV_FILE_PATH = 'point1.csv'; // 서버에 업로드될 CSV 파일 경로
+        var globalGroupedData = {}; // 그룹핑된 데이터를 저장할 전역 변수
+        const CSV_FILE_PATH = 'bmn11-24_fish_point1.csv'; // CSV 파일 경로 (map.html과 같은 위치 가정)
+        const MIN_ZOOM_LEVEL_TO_SHOW_MARKERS = 10; // 마커를 표시할 최소 줌 레벨
 
-        // 서버에서 CSV 파일을 불러와 처리하는 함수 (신규 또는 loadAndProcessCSV 대체)
+        var zoomMessageDiv = document.getElementById('zoom-message');
+
+        // 서버에서 CSV 파일을 불러와 처리하는 함수
         function loadCSVFromServer() {
             alert("서버에서 CSV 파일을 불러옵니다. 파일 크기에 따라 시간이 걸릴 수 있습니다.");
-            fetch(CSV_FILE_PATH) // 서버에 있는 CSV 파일 경로
+            fetch(CSV_FILE_PATH)
                 .then(response => {
                     if (!response.ok) {
-                        throw new Error('네트워크 응답이 올바르지 않습니다. 파일 경로를 확인하세요: ' + response.statusText);
+                        throw new Error('네트워크 응답이 올바르지 않습니다. 파일 경로(' + CSV_FILE_PATH + ')를 확인하세요: ' + response.statusText);
                     }
-                    return response.text(); // 파일 내용을 텍스트로 변환
+                    return response.text();
                 })
                 .then(csvText => {
                     var parsedData = parseCSV(csvText);
                     if (parsedData && parsedData.length > 0) {
                         globalGroupedData = groupDataByPointName(parsedData);
-                        displayGroupedDataOnMap(globalGroupedData);
-                    } else if (parsedData) {
-                        alert("CSV 파일에서 유효한 데이터를 찾지 못했습니다. 파일 내용을 확인해주세요.");
+                        displayGroupedDataOnMap(globalGroupedData); // 데이터 로드 후 마커 표시 시도
+                    } else if (parsedData) { // 빈 배열이 반환된 경우
+                        alert("CSV 파일에서 유효한 데이터를 찾지 못했거나, 데이터가 없습니다. 파일 내용을 확인해주세요.");
                         globalGroupedData = {};
+                        displayGroupedDataOnMap(globalGroupedData); // 마커 레이어 클리어 및 메시지 업데이트
                     }
                 })
                 .catch(error => {
                     console.error('CSV 파일을 불러오는 중 오류 발생:', error);
                     alert('CSV 파일을 불러오는 중 오류가 발생했습니다: ' + error.message);
                     globalGroupedData = {};
+                    displayGroupedDataOnMap(globalGroupedData); // 마커 레이어 클리어 및 메시지 업데이트
                 });
         }
 
-        // 3. parseCSV(csvText) 함수 (이전과 동일, BOM 및 따옴표 처리 개선 유지)
+        // CSV 텍스트 데이터를 파싱하여 객체 배열로 변환하는 함수
         function parseCSV(csvText) {
             console.log("Raw CSV Text (first 500 chars):", csvText ? csvText.substring(0, 500) : "CSV Text is null or undefined");
             if (!csvText || csvText.trim() === "") {
@@ -79,11 +104,12 @@
             }
 
             var headers = lines[0].split(',').map(header => header.trim().replace(/^"|"$/g, ''));
-            if (headers[0] && headers[0].charCodeAt(0) === 0xFEFF) { // BOM 제거
+            if (headers[0] && headers[0].charCodeAt(0) === 0xFEFF) { // UTF-8 BOM 제거
                 headers[0] = headers[0].substring(1);
             }
             console.log("Parsed Headers:", headers);
 
+            // 예상되는 컬럼명 (실제 CSV 파일과 일치해야 함)
             var latColName = 'bmn_point_y';
             var lonColName = 'bmn_point_x';
             var surveyYearColName = '조사년도';
@@ -98,23 +124,24 @@
             var countIndex = headers.indexOf(countColName);
             var pointIndex = headers.indexOf(pointNameColName);
 
+            // 필수 컬럼 존재 여부 확인
             if (pointIndex === -1) {
-                 alert('CSV 파일에서 \'조사지점\' 컬럼(\''+ pointNameColName + '\')을 찾을 수 없습니다. 실제 헤더: ' + headers.join(', '));
+                 alert('CSV 파일에서 \'조사지점\' 컬럼(\''+ pointNameColName + '\')을 찾을 수 없습니다. 이 컬럼은 필수입니다. 실제 인식된 헤더: ' + headers.join(', '));
                  return [];
             }
-            // 위도, 경도 컬럼 확인은 계속 유지
             if (latIndex === -1) {
-                alert('CSV 파일에서 위도(\'' + latColName + '\') 컬럼을 찾을 수 없습니다. 실제 헤더: ' + headers.join(', '));
+                alert('CSV 파일에서 위도(\'' + latColName + '\') 컬럼을 찾을 수 없습니다. 실제 인식된 헤더: ' + headers.join(', '));
                 return [];
             }
             if (lonIndex === -1) {
-                alert('CSV 파일에서 경도(\'' + lonColName + '\') 컬럼을 찾을 수 없습니다. 실제 헤더: ' + headers.join(', '));
+                alert('CSV 파일에서 경도(\'' + lonColName + '\') 컬럼을 찾을 수 없습니다. 실제 인식된 헤더: ' + headers.join(', '));
                 return [];
             }
 
             for (var i = 1; i < lines.length; i++) {
-                if (lines[i].trim() === "") continue;
+                if (lines[i].trim() === "") continue; // 빈 줄은 건너뛰기
                 var currentline = lines[i].split(',');
+
                 if (currentline.length === headers.length) {
                     var lat = parseFloat(currentline[latIndex]);
                     var lon = parseFloat(currentline[lonIndex]);
@@ -122,58 +149,86 @@
 
                     if (!isNaN(lat) && !isNaN(lon)) {
                         result.push({
-                            "위도": lat, "경도": lon, "조사지점": pointNameValue,
+                            "위도": lat,
+                            "경도": lon,
+                            "조사지점": pointNameValue,
                             "조사년도": yearIndex > -1 && currentline[yearIndex] ? currentline[yearIndex].trim().replace(/^"|"$/g, '') : '정보 없음',
                             "국명": speciesIndex > -1 && currentline[speciesIndex] ? currentline[speciesIndex].trim().replace(/^"|"$/g, '') : '정보 없음',
                             "개체수": countIndex > -1 && currentline[countIndex] ? parseInt(currentline[countIndex].trim().replace(/^"|"$/g, '')) : 0
                         });
                     } else {
-                        console.warn("경고: 유효하지 않은 위도/경도 값 - 지점: " + pointNameValue + ", 위도: " + currentline[latIndex] + ", 경도: " + currentline[lonIndex]);
+                        console.warn("경고: 유효하지 않은 위도/경도 값으로 인해 데이터 건너뜀 - 지점명: " + pointNameValue + ", 위도값: " + currentline[latIndex] + ", 경도값: " + currentline[lonIndex] );
                     }
                 } else {
-                     console.warn("경고: 컬럼 수 불일치 - Line " + (i+1) + ": " + lines[i]);
+                     console.warn("경고: 데이터 컬럼 수가 헤더("+headers.length+")와 일치하지 않아("+currentline.length+") 데이터 건너뜀 - Line " + (i+1) + ": " + lines[i]);
                 }
             }
             console.log("Parsed Data Count:", result.length);
             return result;
         }
 
-        // 4. groupDataByPointName(parsedData) 함수 (이전과 동일)
+        // 파싱된 데이터를 '조사지점' 기준으로 그룹핑하는 함수
         function groupDataByPointName(parsedData) {
             var grouped = {};
             parsedData.forEach(function(item) {
                 var pointName = item.조사지점;
                 if (!grouped[pointName]) {
                     grouped[pointName] = {
-                        "위도": item.위도, "경도": item.경도, "조사데이터": []
+                        "위도": item.위도,
+                        "경도": item.경도,
+                        "조사데이터": []
                     };
                 }
                 grouped[pointName].조사데이터.push({
-                    "조사년도": item.조사년도, "국명": item.국명, "개체수": item.개체수
+                    "조사년도": item.조사년도,
+                    "국명": item.국명,
+                    "개체수": item.개체수
                 });
             });
             return grouped;
         }
 
-        // 5. displayGroupedDataOnMap(groupedData) 함수 (이전과 동일)
+        // 그룹핑된 데이터를 지도에 마커로 표시하는 함수
         function displayGroupedDataOnMap(groupedData) {
             markersLayer.clearLayers();
+            var currentZoom = map.getZoom();
+
+            if (currentZoom < MIN_ZOOM_LEVEL_TO_SHOW_MARKERS) {
+                console.log("줌 레벨이 낮아 마커를 표시하지 않습니다. 현재 줌 레벨:", currentZoom, "최소 필요 줌 레벨:", MIN_ZOOM_LEVEL_TO_SHOW_MARKERS);
+                zoomMessageDiv.style.display = 'block'; // 줌 확대 안내 메시지 표시
+                return;
+            }
+            zoomMessageDiv.style.display = 'none'; // 줌 레벨 충분하면 메시지 숨김
+
             var pointCount = Object.keys(groupedData).length;
             if (pointCount > 0) {
-                alert(pointCount + "개의 고유한 조사지점을 로드했습니다. 지도에 표시합니다.");
+                console.log(pointCount + "개의 고유한 조사지점 데이터를 기반으로 마커를 표시합니다. 현재 줌 레벨:", currentZoom);
+            } else {
+                console.log("표시할 조사지점 데이터가 없습니다.");
+                return; // 데이터 없으면 여기서 종료
             }
-            if (pointCount === 0) return;
-
-            // (이하 코드는 이전과 동일)
-            if (pointCount > 2000) { // 마커 개수 경고는 그대로 유지
+            
+            // 너무 많은 마커 표시에 대한 경고 (실제 표시될 마커 수 기준이 아닌, 전체 데이터 기준)
+            // 상황에 따라 이 경고 로직을 조절하거나, 실제 화면에 그려질 마커 수 기준으로 변경할 수 있습니다.
+            if (pointCount > 2000) { 
                 if (!confirm(pointCount + "개의 마커를 표시합니다. 브라우저가 느려질 수 있습니다. 계속하시겠습니까?")) {
                     return;
                 }
             }
+
             for (var pointName in groupedData) {
                 if (groupedData.hasOwnProperty(pointName)) {
                     var pointInfo = groupedData[pointName];
-                    var marker = L.marker([pointInfo.위도, pointInfo.경도]);
+                    
+                    var marker = L.circleMarker([pointInfo.위도, pointInfo.경도], {
+                        radius: 5,
+                        fillColor: "green",
+                        color: "darkgreen",
+                        weight: 1,
+                        opacity: 1,
+                        fillOpacity: 0.8
+                    });
+
                     var popupContent = "<h4>" + pointName + "</h4>";
                     popupContent += "<div style='max-height: 200px; overflow-y: auto;'>";
                     popupContent += "<table><thead><tr><th>조사년도</th><th>국명</th><th>개체수</th></tr></thead><tbody>";
@@ -188,31 +243,60 @@
                     });
                     popupContent += "</tbody></table></div>";
                     marker.bindPopup(popupContent);
+
                     markersLayer.addLayer(marker);
                 }
             }
         }
 
-        // 6. searchAndZoomToPoint() 함수 (이전과 동일)
+        // 지도 줌 변경이 끝났을 때 이벤트 처리
+        map.on('zoomend', function() {
+            // globalGroupedData에 데이터가 있을 경우에만 마커를 다시 그림
+            // 또는 데이터가 없더라도 메시지를 업데이트하기 위해 항상 호출
+            displayGroupedDataOnMap(globalGroupedData);
+        });
+
+        // 조사지점 검색 및 줌인 함수
         function searchAndZoomToPoint() {
             var searchInput = document.getElementById('searchPointInput').value.trim();
             if (!searchInput) {
-                alert("검색할 조사지점명을 입력해주세요."); return;
+                alert("검색할 조사지점명을 입력해주세요.");
+                return;
             }
             if (Object.keys(globalGroupedData).length === 0) {
-                alert("먼저 서버에서 CSV 데이터를 불러오고 데이터가 정상적으로 로드되었는지 확인해주세요."); return;
+                alert("먼저 서버에서 CSV 데이터를 불러오고 데이터가 정상적으로 로드되었는지 확인해주세요.");
+                return;
             }
+
             if (globalGroupedData.hasOwnProperty(searchInput)) {
                 var pointInfo = globalGroupedData[searchInput];
-                map.flyTo([pointInfo.위도, pointInfo.경도], 15);
+                map.flyTo([pointInfo.위도, pointInfo.경도], Math.max(MIN_ZOOM_LEVEL_TO_SHOW_MARKERS, 15)); // 최소 줌 레벨 이상으로 이동, 또는 15레벨
+                
+                // 검색된 지점의 팝업을 열어주는 기능 (선택 사항)
+                markersLayer.eachLayer(function(layer) {
+                    // L.circleMarker의 좌표는 layer.getLatLng()으로 가져옵니다.
+                    // 좌표 비교 시, 부동소수점 오차를 고려해야 할 수 있으나, 여기서는 단순 비교
+                    if (layer.getLatLng().lat === pointInfo.위도 && layer.getLatLng().lng === pointInfo.경도) {
+                         // 팝업을 바로 열면 flyTo 애니메이션과 겹칠 수 있으므로 약간의 딜레이 후 열거나,
+                         // flyTo 완료 후 이벤트를 받아 처리하는 것이 더 자연스러울 수 있습니다.
+                         setTimeout(function() {
+                            layer.openPopup();
+                         }, 500); // 0.5초 후 팝업 열기 (애니메이션 시간 고려)
+                    }
+                });
+
             } else {
                 alert("'" + searchInput + "' 조사지점을 찾을 수 없습니다. 정확한 이름을 입력했는지 확인해주세요.");
             }
         }
 
-        // 페이지 로드 시 CSV를 자동으로 불러오고 싶다면 아래 주석을 해제하고, 
-        // loadCSVFromServer() 함수를 직접 호출합니다. (단, 사용자 경험상 버튼 클릭이 나을 수 있습니다)
-        // window.onload = loadCSVFromServer;
+        // 페이지가 처음 로드될 때 줌 레벨에 따라 메시지를 한번 표시해 줄 수 있습니다.
+        // 또는 사용자가 "데이터 불러오기"를 눌렀을 때 displayGroupedDataOnMap 함수 내에서 처리됩니다.
+        // document.addEventListener('DOMContentLoaded', function() {
+        // if (map.getZoom() < MIN_ZOOM_LEVEL_TO_SHOW_MARKERS) {
+        // zoomMessageDiv.style.display = 'block';
+        // }
+        // });
 
     </script>
 </body>
